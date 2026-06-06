@@ -52,7 +52,12 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 def read_raw_plain(filepath, width, height, bit_depth=10):
-    """Read a plain (unpacked) binary raw file (uint8 / uint16)."""
+    """Read a plain (unpacked) binary raw file (uint8 / uint16).
+
+    读取未打包的二进制原始图像文件（uint8 或 uint16）。
+    返回形状为 (height, width) 的 float64 数组。如果文件像素数超过
+    预期，则截断到期望大小；如果不足则抛出 ValueError。
+    """
     dtype = np.uint8 if bit_depth <= 8 else np.uint16
     raw = np.fromfile(filepath, dtype=dtype)
     expected = width * height
@@ -64,7 +69,11 @@ def read_raw_plain(filepath, width, height, bit_depth=10):
 
 
 def _unpack_mipi_raw10(data, width, height):
-    """Unpack MIPI RAW10 packed format (5 bytes per 4 pixels)."""
+    """Unpack MIPI RAW10 packed format (5 bytes per 4 pixels).
+
+    将 MIPI RAW10 打包格式（每 4 像素 5 字节）展开为每像素 10 位的整数数组。
+    返回 shape 为 (height, width) 的 float64 数组。
+    """
     n_pixels = width * height
     n_groups = n_pixels // 4
     expected_bytes = n_groups * 5
@@ -90,7 +99,11 @@ def _unpack_mipi_raw10(data, width, height):
 
 
 def _unpack_mipi_raw12(data, width, height):
-    """Unpack MIPI RAW12 packed format (3 bytes per 2 pixels)."""
+    """Unpack MIPI RAW12 packed format (3 bytes per 2 pixels).
+
+    将 MIPI RAW12 打包格式（每 2 像素 3 字节）展开为每像素 12 位的整数数组。
+    返回 shape 为 (height, width) 的 float64 数组。
+    """
     n_pixels = width * height
     n_groups = n_pixels // 2
     expected_bytes = n_groups * 3
@@ -118,6 +131,12 @@ def read_raw(filepath, width, height, bit_depth=10, packed=False):
         height:    sensor height in pixels
         bit_depth: bits per pixel (8, 10, 12, 14, 16)
         packed:    if True, assume MIPI packed format
+    """
+    """
+    自动检测并读取原始 .raw 文件。
+
+    会基于文件大小和 bit_depth 判断是未打包（plain）还是 MIPI 打包格式，
+    并调用相应的解包函数。返回 float64 的图像数组，shape 为 (height, width)。
     """
     file_size = os.path.getsize(filepath)
     expected_plain = width * height * (2 if bit_depth > 8 else 1)
@@ -157,7 +176,11 @@ CHANNEL_NAMES = ['R', 'Gr', 'Gb', 'B']
 
 
 def split_bayer(raw_img, pattern='RGGB'):
-    """Split Bayer mosaic into 4 half-resolution channels."""
+    """Split Bayer mosaic into 4 half-resolution channels.
+
+    将 Bayer 马赛克图像分解为 4 个通道（R, Gr, Gb, B），每个通道为原图一半分辨率。
+    `pattern` 指定 Bayer 排列（例如 'RGGB'）。返回字典，键为通道名。
+    """
     offsets = BAYER_OFFSETS[pattern]
     channels = {}
     for name, (r_off, c_off) in offsets.items():
@@ -175,6 +198,12 @@ def parse_data_dirs(raw_dir):
     Supports directory names like:
         ISO100, ISO_100, 100  (ISO level)
         12.5, 25, dark, black, 黑帧  (brightness)
+    """
+    """
+    解析给定的原始数据目录，按 ISO 和亮度层级收集 .raw 文件。
+
+    返回结构为 {iso_level: {brightness_value: [filepaths...]}}。
+    将名称为 dark/black/黑帧 等视作亮度 0.0（暗帧）。
     """
     iso_re = re.compile(r'(?:ISO)?_?(\d+)', re.IGNORECASE)
     dark_re = re.compile(r'(?:dark|black|黑帧|darkframe|bf)', re.IGNORECASE)
@@ -219,7 +248,12 @@ def parse_data_dirs(raw_dir):
 
 def compute_temporal_stats(raw_files, width, height, bit_depth, packed,
                            dark_frame, bayer_pattern, patch_size):
-    """When >= 2 frames are available, use temporal mean/var as GT."""
+    """When >= 2 frames are available, use temporal mean/var as GT.
+
+    使用多帧（>=2）计算每像素的时间平均值与方差，作为噪声模型的目标统计量。
+    计算完成后按 Bayer 通道切分并按给定 patch_size 提取小块，返回列表：
+    (channel_index, signal_mean, noise_var)。方差使用无偏估计（ddof=1）。
+    """
     raws = []
     for fp in raw_files:
         img = read_raw(fp, width, height, bit_depth, packed)
@@ -252,7 +286,12 @@ def compute_temporal_stats(raw_files, width, height, bit_depth, packed,
 
 def compute_spatial_stats(raw_file, width, height, bit_depth, packed,
                           dark_frame, bayer_pattern, patch_size):
-    """When only 1 frame is available, use spatial statistics."""
+    """When only 1 frame is available, use spatial statistics.
+
+    对单帧图像在空间上计算每个 patch 的均值和方差，作为噪声统计量近似值。
+    将图像按 Bayer 通道分离后在每个通道上提取 patch，返回列表：
+    (channel_index, signal_mean, noise_var)。
+    """
     img = read_raw(raw_file, width, height, bit_depth, packed)
     if dark_frame is not None:
         img = img - dark_frame
@@ -278,6 +317,15 @@ def compute_spatial_stats(raw_file, width, height, bit_depth, packed,
 
 def build_dataset(config):
     """Build the benchmark noise dataset."""
+    """
+    构建噪声模型训练数据集的主流程函数。
+
+    从配置中读取原始数据路径、图像尺寸、Bayer 模式等信息，解析目录，
+    估计暗帧（dark frame），对每个 ISO/亮度组合提取噪声统计样本，
+    将样本保存为 numpy 数组并写入元数据（metadata.json）。
+    同时为每个 ISO 拟合一个线性基线模型 var = a * signal + b 并保存参数。
+    返回 (data, meta)。
+    """
     dc = config['data']
     raw_dir      = dc['raw_dir']
     output_dir   = dc['dataset_dir']
@@ -405,6 +453,10 @@ def build_dataset(config):
 # ---------------------------------------------------------------------------
 
 def main():
+    """CLI 入口：解析命令行参数并调用 `build_dataset`。
+
+    该函数读取 YAML 配置文件，可通过 `--raw-dir` 和 `--output-dir` 覆盖配置中的路径。
+    """
     parser = argparse.ArgumentParser(
         description='Build noise model training dataset from raw camera data')
     parser.add_argument('--config', type=str, required=True,
