@@ -1,0 +1,101 @@
+# ============================================================
+# Noise Model Training Configuration
+# ============================================================
+#
+# Workflow:
+#   1. Build dataset:
+#      python src/build_dataset.py --config configs/train_noise_model.yml
+#
+#   2. Train model:
+#      python src/train_noise_model.py --config configs/train_noise_model.yml --cuda
+#
+#   3. Inference & visualisation:
+#      python src/infer_noise.py \
+#        --config configs/train_noise_model.yml \
+#        --checkpoint ckpts/noise_model/noise_model_best.pth
+#
+#   4. Monitor training:
+#      tensorboard --logdir runs/noise_model
+# ============================================================
+
+# ------ Data ------
+data:
+  # Raw data root directory  (modify to your actual path)
+  # Expected layout:
+  #   raw_dir/ISO100/12.5/*.raw
+  #   raw_dir/ISO100/25/*.raw
+  #   ...
+  #   raw_dir/ISO100/dark/*.raw
+  #   raw_dir/ISO200/...
+  raw_dir: "path1"
+
+  # Output directory for the processed benchmark dataset
+  dataset_dir: "./noise_dataset"
+
+  # Sensor parameters  (adjust to your camera)
+  raw_width:  4032
+  raw_height: 3024
+  bit_depth:  10            # bits per pixel (8, 10, 12, 14, 16)
+  packed:     false          # true  = MIPI packed format
+                             # false = plain uint8/uint16
+  bayer_pattern: "RGGB"     # Bayer CFA pattern: RGGB / BGGR / GRBG / GBRG
+  patch_size: 32             # patch size for noise statistics extraction
+
+  # (informational) expected capture conditions
+  iso_levels: [100, 200, 400, 800, 1600]
+  brightness_levels: [0, 12.5, 25, 37.5, 50, 62.5, 75, 87.5, 100]
+  # 0 = dark frame (black frame)
+
+# ------ Model ------
+model:
+  input_dim:  2              # (normalised_iso, normalised_signal)
+  output_dim: 2              # (noise_mean, noise_std)
+  hidden_dims: [128, 256, 256, 128, 64]
+  use_res_blocks: true
+  dropout: 0.1
+
+# ------ Training ------
+train:
+  batch_size:    256
+  num_workers:   4
+  learning_rate: 0.001
+  weight_decay:  1.0e-5
+  num_epochs:    200
+
+  # Loss: "combined" (MSE + KL) or "nll" (Gaussian NLL)
+  loss: "combined"
+  kl_weight: 0.01           # weight of KL regulariser in combined loss
+
+  # Learning rate schedule
+  lr_scheduler:
+    type: "cosine"           # "cosine" or "plateau"
+    T_max: 200               # for cosine
+    eta_min: 1.0e-6          # for cosine
+    patience: 20             # for plateau
+    factor: 0.5              # for plateau
+
+  # Logging & checkpointing
+  log_interval:      50      # print every N batches
+  save_interval:     10      # save .pth every N epochs
+  kl_eval_interval:   5      # compute full-dataset KL every N epochs
+
+# ------ Output paths ------
+output:
+  ckpt_dir:        "./ckpts/noise_model"       # model checkpoints (.pth)
+  log_dir:         "./logs/noise_model"         # text logs
+  tensorboard_dir: "./runs/noise_model"         # TensorBoard events
+
+# ------ Inference / visualisation (used by infer_noise.py) ------
+infer:
+  # Path to a clean reference image for noise overlay visualisation
+  # (any 8-bit image; if empty, a synthetic gradient is used)
+  reference_image: ""
+
+  # ISO levels to visualise
+  vis_iso_levels: [100, 400, 800, 1600]
+
+  # Signal range to sweep for noise-std curves
+  signal_points: 256
+
+  # Output directory for visualisation results
+  vis_output_dir: "./results/noise_vis"
